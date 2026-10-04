@@ -1,75 +1,39 @@
-// Dropbox Media — Nuvio Provider v1.0.0
-// Built for the Nuvio on-device QuickJS runtime.
-// SERVER_MODE is baked at build time by scripts/build_nuvio.py:
-//   "db" → DB-Server: temporary direct Dropbox links (via ?dl=1 redirect on the index)
+// Dropbox Media — Nuvio Provider v1.0.1
+//
+// Runs on-device in Nuvio's QuickJS sandbox. SERVER_MODE is baked at build
+// time by scripts/build_nuvio.py — one source, two providers:
+//   "db" → DB-Server: direct Dropbox links (via ?dl=1 redirect on the index)
 //   "cf" → CF-Server: permanent Cloudflare-proxied stream URLs
-var __defProp = Object.defineProperty;
-var __defProps = Object.defineProperties;
-var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
-var __getOwnPropSymbols = Object.getOwnPropertySymbols;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __propIsEnum = Object.prototype.propertyIsEnumerable;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __spreadValues = (a, b) => {
-  for (var prop in b || (b = {}))
-    if (__hasOwnProp.call(b, prop))
-      __defNormalProp(a, prop, b[prop]);
-  if (__getOwnPropSymbols)
-    for (var prop of __getOwnPropSymbols(b)) {
-      if (__propIsEnum.call(b, prop))
-        __defNormalProp(a, prop, b[prop]);
-    }
-  return a;
-};
-var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
-var __async = (__this, __arguments, generator) => {
-  return new Promise((resolve, reject) => {
-    var fulfilled = (value) => {
-      try {
-        step(generator.next(value));
-      } catch (e) {
-        reject(e);
-      }
-    };
-    var rejected = (value) => {
-      try {
-        step(generator.throw(value));
-      } catch (e) {
-        reject(e);
-      }
-    };
-    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
-    step((generator = generator.apply(__this, __arguments)).next());
-  });
-};
+//
+// Designed lightweight: no codec/audio parsing, no spoofed headers, no
+// setTimeout dependency. Streams carry name, size, format, subtitles.
 
-// core.js
+var SERVER_MODE = "cf";
+
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var TMDB_BASE = "https://api.themoviedb.org/3";
 var INDEX_URL = "https://db-index.gdrive3523.workers.dev";
-var PLAYBACK_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Accept": "video/*,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "identity",
-  "Referer": INDEX_URL + "/",
-  "Origin": INDEX_URL,
-  "DNT": "1"
-};
-var TMDB_TIMEOUT = 8e3;
-var INDEX_TIMEOUT = 12e3;
-var SERVER_MODE = "cf";
+
+// ── Basics ──
+
 function normalize(t) {
-  return t.toLowerCase().replace(/[:;'",.!?()\[\]{}]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return t.toLowerCase()
+    .replace(/[:;'",.!?()\[\]{}]/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
+
 function isVideo(f) {
   return /\.(mkv|mp4|avi|ts|mov|webm|m4v|flv|wmv)$/i.test(f);
 }
+
 function isSubtitle(f) {
   return /\.(srt|vtt|ass|ssa|sub)$/i.test(f);
 }
+
 function encodePath(p) {
-  return p.split("/").map((s) => {
+  return p.split("/").map(function (s) {
     try {
       return encodeURIComponent(decodeURIComponent(s));
     } catch (e) {
@@ -77,349 +41,244 @@ function encodePath(p) {
     }
   }).join("/");
 }
+
+// ── Stream URL per flavor ──
+
 function streamUrl(path) {
-  if (path.startsWith("http")) return path;
+  if (path.indexOf("http") === 0) return path;
   var u = INDEX_URL + encodePath(path);
   return SERVER_MODE === "db" ? u + "?dl=1" : u;
 }
-function fetchWithTimeout(_0) {
-  return __async(this, arguments, function* (url, opts = {}, ms = 1e4) {
-    const canTime = typeof AbortController !== "undefined" && typeof setTimeout === "function";
-    if (!canTime) return fetch(url, opts);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    try {
-      const resp = yield fetch(url, __spreadProps(__spreadValues({}, opts), { signal: controller.signal }));
-      return resp;
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-}
-function parseMetadata(filename, sizeBytes) {
-  var _a;
-  const name = filename.toLowerCase();
-  const ext = ((_a = (filename.match(/\.([a-z0-9]+)$/i) || [])[1]) == null ? void 0 : _a.toLowerCase()) || "";
-  let quality = "Unknown";
-  if (/2160p|\b4k\b|\buhd\b/.test(name)) quality = "4K";
-  else if (/1080p|fhd/.test(name)) quality = "1080p";
-  else if (/720p|hd/.test(name)) quality = "720p";
-  else if (/480p|sd/.test(name)) quality = "480p";
-  else if (/576p/.test(name)) quality = "576p";
-  else if (/360p/.test(name)) quality = "360p";
-  if (quality === "Unknown") {
-    let bytes = 0;
-    if (typeof sizeBytes === "number") bytes = sizeBytes;
-    else if (typeof sizeBytes === "string") {
-      const m = sizeBytes.match(/^([\d.]+)\s*(B|KB|MB|GB|TB)/i);
-      if (m) {
-        const mult = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 }[m[2].toUpperCase()];
-        bytes = parseFloat(m[1]) * mult;
-      }
-    }
-    if (bytes >= 6e9) quality = "4K";
-    else if (bytes >= 12e8) quality = "1080p";
-    else if (bytes >= 4e8) quality = "720p";
-    else if (bytes > 0) quality = "480p";
+
+// ── Fetch with a timeout guard (QuickJS on-device has no setTimeout) ──
+
+async function fetchT(url, ms) {
+  if (typeof setTimeout !== "function" || typeof AbortController === "undefined") {
+    return fetch(url);
   }
-  let codec = "";
-  if (/hevc|x265|h\.?265|av1/.test(name)) codec = /av1/.test(name) ? "AV1" : "HEVC";
-  else if (/x264|h\.?264/.test(name)) codec = "H.264";
-  let audio = "";
-  if (/truehd/.test(name)) {
-    audio = /7\.1/.test(name) ? "TrueHD 7.1" : "TrueHD";
-  } else if (/ddp|dolby.digital.plus|e-?ac-?3/.test(name)) {
-    audio = /7\.1/.test(name) ? "DDP 7.1" : /5\.1/.test(name) ? "DDP 5.1" : "DDP";
-  } else if (/dts/.test(name)) {
-    audio = /hd/.test(name) ? "DTS-HD" : /5\.1/.test(name) ? "DTS 5.1" : "DTS";
-  } else if (/dd\+|dolby.digital|ac-?3/.test(name)) {
-    audio = /5\.1/.test(name) ? "DD 5.1" : "DD";
-  } else if (/aac/.test(name)) {
-    audio = /5\.1/.test(name) ? "AAC 5.1" : "AAC";
-  } else if (/flac/.test(name)) {
-    audio = "FLAC";
+  var c = new AbortController();
+  var timer = setTimeout(function () { c.abort(); }, ms || 12000);
+  try {
+    return await fetch(url, { signal: c.signal });
+  } finally {
+    clearTimeout(timer);
   }
-  if (/atmos/.test(name)) audio += " \xB7 Atmos";
-  let hdr = "";
-  if (/dolby.vision|dovi|dv\b/.test(name)) hdr = "Dolby Vision";
-  else if (/hdr10\+|hdr\+/.test(name)) hdr = "HDR10+";
-  else if (/hdr10/.test(name)) hdr = "HDR10";
-  else if (/hdr/.test(name)) hdr = "HDR";
-  else if (/10.?bit|10bit|10-bit/.test(name)) hdr = "10-bit";
-  else if (/sdr/.test(name)) hdr = "SDR";
-  let source = "";
-  if (/blu-?ray|bdrip|bdremux|brrip/.test(name)) source = "Blu-ray";
-  else if (/web-?dl|webdl/.test(name)) source = "WEB-DL";
-  else if (/web-?rip|webrip/.test(name)) source = "WEBRip";
-  else if (/hdrip/.test(name)) source = "HDRip";
-  else if (/dvdrip|dvd/.test(name)) source = "DVD";
-  const parts = [quality];
-  if (source) parts.push(source);
-  if (hdr) parts.push(hdr);
-  if (audio) parts.push(audio);
-  if (codec) parts.push(codec);
-  return { quality, codec, audio, hdr, source, format: ext };
 }
-function humanSize(bytes) {
-  if (!bytes || bytes <= 0) return "";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0, v = bytes;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return v >= 100 ? Math.round(v) + " " + units[i] : v.toFixed(1) + " " + units[i];
+
+// ── TMDB: id → title + year ──
+
+async function tmdbTitle(id, type) {
+  var t = type === "tv" || type === "series" ? "tv" : "movie";
+  var raw = String(id).indexOf("tmdb:") === 0 ? String(id).slice(5) : String(id);
+  var url = TMDB_BASE + (raw.indexOf("tt") === 0
+    ? "/find/" + raw + "?external_source=imdb_id&"
+    : "/" + t + "/" + raw + "?") + "api_key=" + TMDB_API_KEY;
+  var r = await fetchT(url, 8000);
+  if (!r.ok) return null;
+  var d = await r.json();
+  var item = raw.indexOf("tt") === 0 ? ((d[t + "_results"] || [])[0]) : d;
+  if (!item) return null;
+  var date = item.release_date || item.first_air_date || "";
+  return {
+    title: item.title || item.name || "",
+    year: date ? parseInt(date.slice(0, 4)) : null,
+  };
 }
-function formatSize(size) {
-  if (size == null) return "";
-  if (typeof size === "number") return humanSize(size);
-  const s = String(size).trim();
-  const m = s.match(/^([\d.]+)\s*(B|KB|MB|GB|TB)$/i);
-  if (m) return s;
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? humanSize(n) : s;
+
+// ── Folder matching: exact → substring → Jaccard ──
+
+function jaccard(a, b) {
+  var sa = normalize(a).split(" ").filter(Boolean);
+  var sb = normalize(b).split(" ").filter(Boolean);
+  if (!sa.length || !sb.length) return 0;
+  var set = new Set(sb), hit = 0;
+  sa.forEach(function (w) { if (set.has(w)) hit++; });
+  return hit / (sa.length + sb.length - hit);
 }
-function tmdbTitle(id, type) {
-  return __async(this, null, function* () {
-    var _a, _b;
-    id = String(id);
-    const tmdbType = type === "series" ? "tv" : "movie";
-    let url, title, year;
-    try {
-      if (id.startsWith("tt")) {
-        url = `${TMDB_BASE}/find/${id}?api_key=${TMDB_API_KEY}&external_source=imdb_id&language=en-US`;
-        const r = yield fetchWithTimeout(url, {}, TMDB_TIMEOUT);
-        if (!r.ok) return null;
-        const d = yield r.json();
-        const item = tmdbType === "movie" ? (_a = d.movie_results) == null ? void 0 : _a[0] : (_b = d.tv_results) == null ? void 0 : _b[0];
-        if (!item) return null;
-        title = tmdbType === "movie" ? item.title : item.name;
-        year = parseInt((item.release_date || item.first_air_date || "").slice(0, 4)) || null;
-      } else {
-        const tmdbId = id.replace(/^tmdb:/, "");
-        url = `${TMDB_BASE}/${tmdbType}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US&append_to_response=alternative_titles`;
-        const r = yield fetchWithTimeout(url, {}, TMDB_TIMEOUT);
-        if (!r.ok) return null;
-        const d = yield r.json();
-        title = tmdbType === "movie" ? d.title : d.name;
-        year = parseInt((d.release_date || d.first_air_date || "").slice(0, 4)) || null;
-      }
-    } catch (e) {
-      return null;
-    }
-    return { title, year };
-  });
-}
-function jaccardSimilarity(a, b) {
-  const setA = new Set(normalize(a).split(" ").filter(Boolean));
-  const setB = new Set(normalize(b).split(" ").filter(Boolean));
-  if (setA.size === 0 || setB.size === 0) return 0;
-  let intersection = 0;
-  for (const w of setA) if (setB.has(w)) intersection++;
-  return intersection / (setA.size + setB.size - intersection);
-}
+
 function findFolder(folders, title, year) {
-  const norm = normalize(title);
-  for (const f of folders) {
-    if (!f.isFolder) continue;
-    const m = f.name.match(/^(.+?)\s*\((\d{4})\)/);
-    const fTitle = m ? m[1] : f.name;
-    const fYear = m ? parseInt(m[2]) : null;
-    if (normalize(fTitle) === norm) {
-      if (year && fYear && Math.abs(year - fYear) > 1) continue;
-      return f;
+  var norm = normalize(title), match = null, i, f, m, ft, fy;
+
+  for (i = 0; i < folders.length; i++) {
+    m = folders[i].name.match(/^(.+?)\s*\((\d{4})\)/);
+    ft = m ? m[1] : folders[i].name;
+    fy = m ? parseInt(m[2]) : null;
+    if (normalize(ft) === norm && (!year || !fy || Math.abs(year - fy) <= 1)) { match = folders[i]; break; }
+  }
+  if (!match) {
+    for (i = 0; i < folders.length; i++) {
+      m = folders[i].name.match(/^(.+?)\s*\((\d{4})\)/);
+      ft = m ? m[1] : folders[i].name;
+      fy = m ? parseInt(m[2]) : null;
+      var nf = normalize(ft);
+      if ((nf.indexOf(norm) !== -1 || norm.indexOf(nf) !== -1) && (!year || !fy || Math.abs(year - fy) <= 1)) { match = folders[i]; break; }
     }
   }
-  for (const f of folders) {
-    if (!f.isFolder) continue;
-    const m = f.name.match(/^(.+?)\s*\((\d{4})\)/);
-    const fTitle = m ? m[1] : f.name;
-    const fYear = m ? parseInt(m[2]) : null;
-    const nf = normalize(fTitle);
-    if (nf.includes(norm) || norm.includes(nf)) {
-      if (year && fYear && Math.abs(year - fYear) > 1) continue;
-      return f;
+  if (!match) {
+    var best = 0.6;
+    for (i = 0; i < folders.length; i++) {
+      m = folders[i].name.match(/^(.+?)\s*\((\d{4})\)/);
+      ft = m ? m[1] : folders[i].name;
+      fy = m ? parseInt(m[2]) : null;
+      if (year && fy && Math.abs(year - fy) > 1) continue;
+      var score = jaccard(ft, title);
+      if (score > best) { best = score; match = folders[i]; }
     }
   }
-  let best = null, bestScore = 0.6;
-  for (const f of folders) {
-    if (!f.isFolder) continue;
-    const m = f.name.match(/^(.+?)\s*\((\d{4})\)/);
-    const fTitle = m ? m[1] : f.name;
-    const fYear = m ? parseInt(m[2]) : null;
-    if (year && fYear && Math.abs(year - fYear) > 1) continue;
-    const score = jaccardSimilarity(fTitle, title);
-    if (score > bestScore) {
-      bestScore = score;
-      best = f;
-    }
-  }
-  return best;
+  return match;
 }
+
+// ── Episode matching (season folders, then recursive release subfolders) ──
+
 function findSeasons(entries, seasonNum) {
-  // ALL season folders, not just the first — parallel copies (multi-quality) all get read
-  const sPad = String(seasonNum).padStart(2, "0");
-  const sPlain = String(seasonNum);
-  const found = [];
-  for (const e of entries) {
-    if (!e.isFolder) continue;
-    const t = e.name.toLowerCase();
-    if (["season " + sPad, "season " + sPlain, "s" + sPad, "s" + sPlain].includes(t) || (t.includes("season") && (t.includes(sPad) || t.includes(" " + sPlain)))) found.push(e);
-  }
+  var pad = String(seasonNum).padStart(2, "0");
+  var plain = String(seasonNum);
+  var found = [];
+  entries.forEach(function (e) {
+    if (!e.isFolder) return;
+    var t = e.name.toLowerCase();
+    if (t === "season " + pad || t === "season " + plain || t === "s" + pad || t === "s" + plain) found.push(e);
+  });
   return found;
 }
+
 function matchEp(filename, season, episode) {
-  const m = String(filename).toUpperCase().match(new RegExp("S0?" + season + "E0?" + episode));
+  var m = String(filename).toUpperCase().match(new RegExp("S0?" + season + "E0?" + episode));
   if (!m) return false;
-  const rest = String(filename).toUpperCase().slice(m.index + m[0].length);
-  return !/^\d/.test(rest);
+  return !/^\d/.test(String(filename).toUpperCase().slice(m.index + m[0].length));
 }
+
+async function collectEpisodeStreams(lists, season, episode, makeStream, skipPaths, depth) {
+  var streams = [], toScan = [], seen = new Set(skipPaths || []);
+  lists.forEach(function (list) {
+    list.forEach(function (e) {
+      if (e.isFolder) {
+        if (!seen.has(e.path)) { seen.add(e.path); toScan.push(e); }
+      } else if (isVideo(e.name) && matchEp(e.name, season, episode)) {
+        streams.push(makeStream(e, findSubtitles(list, e.name)));
+      }
+    });
+  });
+  if ((depth || 0) < 3 && toScan.length) {
+    var results = await Promise.all(toScan.map(function (entry) { return fetchListing(entry.path); }));
+    var more = await collectEpisodeStreams(results, season, episode, makeStream, skipPaths, (depth || 0) + 1);
+    return streams.concat(more);
+  }
+  return streams;
+}
+
+// ── Subtitles: same base name as the video, different extension ──
+
 function findSubtitles(files, videoName) {
-  const base = videoName.replace(/\.[^.]+$/, "").toLowerCase();
-  return files.filter((f) => !f.isFolder && isSubtitle(f.name) && f.name.replace(/\.[^.]+$/, "").toLowerCase() === base).map((f) => ({
-    url: streamUrl(f.path),
-    language: "en",
-    // Nuvio reads `language`
-    lang: "en",
-    // Stremio reads `lang`
-    name: f.name
-    // display name
-  }));
-}
-function resolveMovie(id, fetchListing2, makeStream2) {
-  return __async(this, null, function* () {
-    const info = yield tmdbTitle(id, "movie");
-    if (!info) throw new Error('TMDB lookup failed for "' + id + '"');
-    const label = '"' + info.title + (info.year ? " (" + info.year + ")" : "") + '"';
-    try {
-      const searchUrl = INDEX_URL + "/api/search?q=" + encodeURIComponent(info.title) + "&type=movie" + (info.year ? "&year=" + info.year : "");
-      const r = yield fetchWithTimeout(searchUrl, {}, INDEX_TIMEOUT);
-      if (r.ok) {
-        const data = yield r.json();
-        if (data.results && data.results.length) {
-          const files2 = data.results[0].files || [];
-          const videoFiles2 = files2.filter((f) => !f.isFolder && isVideo(f.name));
-          if (videoFiles2.length) {
-            const subs2 = findSubtitles(files2, videoFiles2[0].name);
-            return videoFiles2.map((f) => makeStream2(f, subs2));
-          }
-        }
-      }
-    } catch (e) {
-    }
-    const folders = yield fetchListing2("/movie/");
-    const match = findFolder(folders, info.title, info.year);
-    if (!match) throw new Error("No folder match for " + label + " in /movie/");
-    const files = yield fetchListing2(match.path);
-    const videoFiles = files.filter((f) => !f.isFolder && isVideo(f.name));
-    if (!videoFiles.length) throw new Error('No video files in "' + match.path + '"');
-    const subs = videoFiles.length ? findSubtitles(files, videoFiles[0].name) : [];
-    return videoFiles.map((f) => makeStream2(f, subs));
-  });
-}
-function collectEpisodeStreams(lists, season, episode, fetchListing2, makeStream2, skipPaths, depth) {
-  return __async(this, null, function* () {
-    depth = depth || 0;
-    // walk every folder level (max depth 3), collecting ALL episode matches
-    const streams = [];
-    const toScan = [];
-    const seen = new Set(skipPaths || []);
-    for (const list of lists) {
-      for (const e of list) {
-        if (e.isFolder) {
-          if (!seen.has(e.path)) { seen.add(e.path); toScan.push(e); }
-        } else if (isVideo(e.name) && matchEp(e.name, season, episode)) {
-          streams.push(makeStream2(e, findSubtitles(list, e.name)));
-        }
-      }
-    }
-    if (depth < 3 && toScan.length) {
-      const results = yield Promise.allSettled(toScan.map((entry) => fetchListing2(entry.path)));
-      const subLists = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
-      const more = yield collectEpisodeStreams(subLists, season, episode, fetchListing2, makeStream2, skipPaths, depth + 1);
-      for (const m of more) streams.push(m);
-    }
-    return streams;
-  });
-}
-function resolveSeries(id, season, episode, fetchListing2, makeStream2) {
-  return __async(this, null, function* () {
-    const info = yield tmdbTitle(id, "series");
-    if (!info) throw new Error('TMDB lookup failed for "' + id + '"');
-    let showEntries = null;
-    try {
-      const searchUrl = INDEX_URL + "/api/search?q=" + encodeURIComponent(info.title) + "&type=tv" + (info.year ? "&year=" + info.year : "");
-      const r = yield fetchWithTimeout(searchUrl, {}, INDEX_TIMEOUT);
-      if (r.ok) {
-        const data = yield r.json();
-        if (data.results && data.results.length) {
-          showEntries = data.results[0].files || [];
-        }
-      }
-    } catch (e) {
-    }
-    if (!showEntries) {
-      const folders = yield fetchListing2("/tv/");
-      const match = findFolder(folders, info.title, info.year);
-      if (!match) throw new Error('No show folder for "' + info.title + (info.year ? " (" + info.year + ")" : "") + '" in /tv/');
-      showEntries = yield fetchListing2(match.path);
-    }
-    // scan show root + ALL season folders, then ALL subfolders recursively - collect every match
-    const seasonFolders = findSeasons(showEntries, season);
-    const skipPaths = seasonFolders.map((s) => s.path);
-    const lists = [showEntries];
-    for (const sf of seasonFolders) lists.push(yield fetchListing2(sf.path));
-    const streams = yield collectEpisodeStreams(lists, season, episode, fetchListing2, makeStream2, skipPaths);
-    if (!streams.length) throw new Error("S" + String(season).padStart(2, "0") + "E" + String(episode).padStart(2, "0") + ' not found for "' + info.title + '"');
-    return streams;
+  var base = videoName.replace(/\.[^.]+$/, "").toLowerCase();
+  return files.filter(function (f) {
+    return !f.isFolder && isSubtitle(f.name) && f.name.replace(/\.[^.]+$/, "").toLowerCase() === base;
+  }).map(function (f) {
+    return { url: streamUrl(f.path), language: "en", name: f.name };
   });
 }
 
-// plugin.js
-function fetchListing(path) {
-  return __async(this, null, function* () {
-    const resp = yield fetch(INDEX_URL + "/api" + path);
-    const data = yield resp.json();
-    return data.entries || [];
-  });
+// ── Library listing (JSON API on the index) ──
+
+async function fetchListing(path) {
+  var r = await fetchT(INDEX_URL + "/api" + encodePath(path), 12000);
+  var d = await r.json();
+  return d.entries || [];
 }
+
+// ── Stream cards ──
+
+function qualityOf(name, size) {
+  var n = name.toLowerCase();
+  if (/2160p|\b4k\b|\buhd\b/.test(n)) return "4K";
+  if (/1080p/.test(n)) return "1080p";
+  if (/720p/.test(n)) return "720p";
+  if (/480p/.test(n)) return "480p";
+  var m = String(size || "").match(/^([\d.]+)\s*(B|KB|MB|GB|TB)/i);
+  if (m) {
+    var b = parseFloat(m[1]) * ({ B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 })[m[2].toUpperCase()];
+    if (b >= 6e9) return "4K";
+    if (b >= 12e8) return "1080p";
+    if (b >= 4e8) return "720p";
+  }
+  return "";
+}
+
+// Nuvio reads: name (bold line), size (string, top-level), format,
+// subtitles (top-level), behaviorHints.notWebReady (top-level).
 function makeStream(file, subtitles) {
-  const meta = parseMetadata(file.name, file.size);
-  return __spreadProps(__spreadValues({
+  var s = {
     name: file.name,
-    // Nuvio: bold line = full filename; size shows via the Size badge (top-level `size`)
     title: file.name,
     url: streamUrl(file.path),
-    // No `quality` sent: Nuvio hardcodes the card line as `quality • size • language`
-    // in toStreamItem — a blank field is dropped, so the line collapses to just the
-    // size. That gives us exactly: bold filename + size, nothing else.
-    size: file.size != null ? formatSize(file.size) : void 0,
-    // Nuvio shows this raw — must be pretty
-    format: meta.format,
-    headers: PLAYBACK_HEADERS
-  }, subtitles && subtitles.length ? { subtitles } : {}), {
-    // Nuvio reads top-level
-    behaviorHints: { notWebReady: true }
-  });
+    size: typeof file.size === "string" && file.size ? file.size : undefined,
+    format: (file.name.match(/\.([a-z0-9]+)$/i) || [])[1],
+  };
+  if (subtitles && subtitles.length) s.subtitles = subtitles;
+  s.behaviorHints = { notWebReady: true };
+  return s;
 }
-function getStreams(tmdbId, mediaType, season, episode) {
-  return __async(this, null, function* () {
-    try {
-      if (mediaType === "movie") {
-        return yield resolveMovie(tmdbId, fetchListing, makeStream);
-      } else if (mediaType === "tv" || mediaType === "series") {
-        return yield resolveSeries(tmdbId, season, episode, fetchListing, makeStream);
-      }
-      return [];
-    } catch (error) {
-      console.error("[Dropbox] Error: " + error.message);
-      return [];
-    }
-  });
+
+// ── Resolvers ──
+
+async function searchLibrary(title, type, year) {
+  var r = await fetchT(INDEX_URL + "/api/search?q=" + encodeURIComponent(title) + "&type=" + type + (year ? "&year=" + year : ""), 12000);
+  if (!r.ok) return null;
+  var d = await r.json();
+  return d.results && d.results.length ? d.results[0].files || [] : null;
 }
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { getStreams };
-} else {
-  const g = typeof global !== "undefined" ? global : globalThis;
-  g.getStreams = { getStreams };
+
+async function resolveMovie(id) {
+  var info = await tmdbTitle(id, "movie");
+  if (!info || !info.title) return [];
+
+  var files = null;
+  try { files = await searchLibrary(info.title, "movie", info.year); } catch (e) {}
+  if (!files) {
+    var folders = await fetchListing("/movie/");
+    var match = findFolder(folders, info.title, info.year);
+    if (!match) return [];
+    files = await fetchListing(match.path);
+  }
+
+  return files
+    .filter(function (f) { return !f.isFolder && isVideo(f.name); })
+    .map(function (f) { return makeStream(f, findSubtitles(files, f.name)); });
 }
+
+async function resolveSeries(id, season, episode) {
+  var info = await tmdbTitle(id, "series");
+  if (!info || !info.title) return [];
+
+  var showEntries = null;
+  try { showEntries = await searchLibrary(info.title, "tv", info.year); } catch (e) {}
+  if (!showEntries) {
+    var folders = await fetchListing("/tv/");
+    var match = findFolder(folders, info.title, info.year);
+    if (!match) return [];
+    showEntries = await fetchListing(match.path);
+  }
+
+  var seasonFolders = findSeasons(showEntries, season);
+  var lists = [showEntries];
+  for (var i = 0; i < seasonFolders.length; i++) {
+    lists.push(await fetchListing(seasonFolders[i].path));
+  }
+  return collectEpisodeStreams(lists, season, episode, makeStream, seasonFolders.map(function (s) { return s.path; }));
+}
+
+// ── Entry point ──
+
+async function getStreams(tmdbId, mediaType, season, episode) {
+  try {
+    if (mediaType === "movie") return await resolveMovie(tmdbId);
+    if (mediaType === "tv" || mediaType === "series") return await resolveSeries(tmdbId, season, episode);
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Nuvio loads the plugin object on-device
+var g = typeof global !== "undefined" ? global : globalThis;
+g.getStreams = { getStreams: getStreams };
