@@ -65,9 +65,14 @@ async function fetchT(url, ms) {
   }
 }
 
-// ── TMDB: id → title + year ──
+// ── TMDB: id → title + year (cached 30 min — binge sessions skip repeat lookups) ──
+
+var tmdbCache = {};
 
 async function tmdbTitle(id, type) {
+  var key = type + ":" + id;
+  var c = tmdbCache[key];
+  if (c && Date.now() - c.ts < 1800000) return c.info;
   var t = type === "tv" || type === "series" ? "tv" : "movie";
   var raw = String(id).indexOf("tmdb:") === 0 ? String(id).slice(5) : String(id);
   var url = TMDB_BASE + (raw.indexOf("tt") === 0
@@ -79,10 +84,12 @@ async function tmdbTitle(id, type) {
   var item = raw.indexOf("tt") === 0 ? ((d[t + "_results"] || [])[0]) : d;
   if (!item) return null;
   var date = item.release_date || item.first_air_date || "";
-  return {
+  var info = {
     title: item.title || item.name || "",
     year: date ? parseInt(date.slice(0, 4)) : null,
   };
+  tmdbCache[key] = { info: info, ts: Date.now() };
+  return info;
 }
 
 // ── Folder matching: exact → substring → Jaccard ──
@@ -221,8 +228,10 @@ function makeStream(file, subtitles) {
 
 // ── Resolvers ──
 
-async function searchLibrary(title, type, year) {
-  var r = await fetchT(INDEX_URL + "/api/search?q=" + encodeURIComponent(title) + "&type=" + type + (year ? "&year=" + year : ""), 12000);
+async function searchLibrary(title, type, year, season, episode) {
+  var q = "q=" + encodeURIComponent(title) + "&type=" + type + (year ? "&year=" + year : "");
+  if (season && episode) q += "&season=" + season + "&episode=" + episode; // one-shot episode resolve
+  var r = await fetchT(INDEX_URL + "/api/search?" + q, 15000);
   if (!r.ok) return null;
   var d = await r.json();
   return d.results && d.results.length ? d.results[0].files || [] : null;
@@ -250,6 +259,20 @@ async function resolveSeries(id, season, episode) {
   var info = await tmdbTitle(id, "series");
   if (!info || !info.title) return [];
 
+  // Fast path: the index resolves the whole episode in ONE request (server-side parallel walk)
+  try {
+    var files = await searchLibrary(info.title, "tv", info.year, season, episode);
+    var streams = (files || [])
+      .filter(function (f) { return !f.isFolder && isVideo(f.name); })
+      .map(function (f) {
+        return makeStream(f, (f.subtitles || []).map(function (s) {
+          return { url: streamUrl(s.path), language: "en", name: s.name };
+        }));
+      });
+    if (streams.length) return streams;
+  } catch (e) {}
+
+  // Fallback: walk locally (parallel season listings, recursive release folders)
   var showEntries = null;
   try { showEntries = await searchLibrary(info.title, "tv", info.year); } catch (e) {}
   if (!showEntries) {
@@ -260,10 +283,8 @@ async function resolveSeries(id, season, episode) {
   }
 
   var seasonFolders = findSeasons(showEntries, season);
-  var lists = [showEntries];
-  for (var i = 0; i < seasonFolders.length; i++) {
-    lists.push(await fetchListing(seasonFolders[i].path));
-  }
+  var seasonLists = await Promise.all(seasonFolders.map(function (sf) { return fetchListing(sf.path); }));
+  var lists = [showEntries].concat(seasonLists);
   return collectEpisodeStreams(lists, season, episode, makeStream, seasonFolders.map(function (s) { return s.path; }));
 }
 
