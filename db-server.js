@@ -228,6 +228,17 @@ function makeStream(file, subtitles) {
 
 // ── Resolvers ──
 
+// Single-request resolve: the index resolves the id AND (for tv) the whole episode
+// server-side, so the plugin makes ONE call total — no on-device TMDB round trip.
+async function searchById(id, type, season, episode) {
+  var q = "tmdb=" + encodeURIComponent(id) + "&type=" + type;
+  if (season && episode) q += "&season=" + season + "&episode=" + episode;
+  var r = await fetchT(INDEX_URL + "/api/search?" + q, 15000);
+  if (!r.ok) return null;
+  var d = await r.json();
+  return d.results && d.results.length ? d.results[0].files || [] : null;
+}
+
 async function searchLibrary(title, type, year, season, episode) {
   var q = "q=" + encodeURIComponent(title) + "&type=" + type + (year ? "&year=" + year : "");
   if (season && episode) q += "&season=" + season + "&episode=" + episode; // one-shot episode resolve
@@ -237,7 +248,22 @@ async function searchLibrary(title, type, year, season, episode) {
   return d.results && d.results.length ? d.results[0].files || [] : null;
 }
 
+function filesToStreams(files) {
+  return (files || [])
+    .filter(function (f) { return !f.isFolder && isVideo(f.name); })
+    .map(function (f) {
+      return makeStream(f, (f.subtitles || []).map(function (s) {
+        return { url: streamUrl(s.path), language: "en", name: s.name };
+      }));
+    });
+}
+
 async function resolveMovie(id) {
+  try {
+    var streams0 = filesToStreams(await searchById(id, "movie"));
+    if (streams0.length) return streams0;
+  } catch (e) {}
+
   var info = await tmdbTitle(id, "movie");
   if (!info || !info.title) return [];
 
@@ -256,10 +282,17 @@ async function resolveMovie(id) {
 }
 
 async function resolveSeries(id, season, episode) {
+  // Fast path: ONE request — the index resolves id, title and the episode server-side
+  try {
+    var files0 = await searchById(id, "tv", season, episode);
+    var streams0 = filesToStreams(files0);
+    if (streams0.length) return streams0;
+  } catch (e) {}
+
   var info = await tmdbTitle(id, "series");
   if (!info || !info.title) return [];
 
-  // Fast path: the index resolves the whole episode in ONE request (server-side parallel walk)
+  // Fallback: title-based one-shot (client-side TMDB + server-side episode walk)
   try {
     var files = await searchLibrary(info.title, "tv", info.year, season, episode);
     var streams = (files || [])
