@@ -1,0 +1,70 @@
+{
+  "name": "Dropbox Media",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "db-server",
+      "name": "DB-Server",
+      "description": "Direct Dropbox links \u2014 fast temporary URLs from dl.dropboxusercontent.com",
+      "version": "1.0.0",
+      "author": "elixir3847",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "db-server.js",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "en"
+      ],
+      "formats": [
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "webm",
+        "ts",
+        "m4v",
+        "flv",
+        "wmv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true,
+      "hasSettings": false
+    },
+    {
+      "id": "cf-server",
+      "name": "CF-Server",
+      "description": "Cloudflare edge \u2014 permanent proxied stream URLs with Range seeking",
+      "version": "1.0.0",
+      "author": "elixir3847",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "cf-server.js",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "en"
+      ],
+      "formats": [
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "webm",
+        "ts",
+        "m4v",
+        "flv",
+        "wmv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true,
+      "hasSettings": false
+    }
+  ]
+}
