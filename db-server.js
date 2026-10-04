@@ -181,7 +181,7 @@ function findSubtitles(files, videoName) {
 // ── Library listing (JSON API on the index) ──
 
 async function fetchListing(path) {
-  var r = await fetchT(INDEX_URL + "/api" + encodePath(path), 12000);
+  var r = await fetchT(INDEX_URL + "/api" + path, 12000); // raw path — encoding breaks on-device
   var d = await r.json();
   return d.entries || [];
 }
@@ -279,6 +279,10 @@ async function getStreams(tmdbId, mediaType, season, episode) {
   }
 }
 
-// Nuvio loads the plugin object on-device
-var g = typeof global !== "undefined" ? global : globalThis;
-g.getStreams = { getStreams: getStreams };
+// Nuvio loads the plugin object on-device (global); Node uses module.exports
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { getStreams: getStreams };
+} else {
+  var g = typeof global !== "undefined" ? global : globalThis;
+  g.getStreams = { getStreams: getStreams };
+}
