@@ -1,13 +1,13 @@
 {
   "name": "Dropbox Media",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Personal Dropbox library — direct links or Cloudflare proxy",
   "author": "SUFahad007",
   "scrapers": [
     {
       "id": "db-server",
       "name": "DB-Server",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "filename": "db-server.js",
       "description": "Direct Dropbox links — fastest start, served by Dropbox itself",
       "enabled": true,
@@ -20,7 +20,7 @@
     {
       "id": "cf-server",
       "name": "CF-Server",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "filename": "cf-server.js",
       "description": "Cloudflare proxy — stable URLs with seek support",
       "enabled": true,
